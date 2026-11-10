@@ -1,0 +1,19 @@
+# ESPHome
+*.bin
+*.elf
+*.hex
+*.uf2
+.esphome/
+build/
+
+# Secrets
+secrets.yaml
+*.secret
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
