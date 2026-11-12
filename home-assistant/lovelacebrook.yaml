@@ -1,0 +1,67 @@
+title: De Meetbeek Monitoring
+views:
+  - title: Water Quality
+    icon: mdi:water
+    cards:
+      - type: picture-glance
+        image: /local/brook.jpg
+        title: De Grote Beek
+        entities:
+          - sensor.de_meetbeek_water_level
+          - sensor.de_meetbeek_water_temperature
+          - sensor.de_meetbeek_ec
+          - sensor.de_meetbeek_turbidity
+
+      - type: gauge
+        entity: sensor.de_meetbeek_water_level
+        name: Water Level
+        min: 0
+        max: 1
+        unit: m
+        severity:
+          green: 0
+          yellow: 0.5
+          red: 0.8
+
+      - type: gauge
+        entity: sensor.de_meetbeek_ec
+        name: Electrical Conductivity
+        min: 0
+        max: 2000
+        unit: µS/cm
+        severity:
+          green: 0
+          yellow: 700
+          red: 1200
+
+      - type: history-graph
+        entities:
+          - sensor.de_meetbeek_water_level
+          - sensor.de_meetbeek_ultrasonic_level
+        title: Water Level (TL-136 vs. Ultrasonic)
+        hours_to_show: 24
+
+  - title: Air Quality
+    icon: mdi:air-filter
+    cards:
+      - type: gauge
+        entity: sensor.de_meetbeek_pm2_5
+        name: PM2.5
+        min: 0
+        max: 100
+        unit: µg/m³
+        severity:
+          green: 0
+          yellow: 25
+          red: 50
+
+      - type: gauge
+        entity: sensor.de_meetbeek_pm10
+        name: PM10
+        min: 0
+        max: 200
+        unit: µg/m³
+        severity:
+          green: 0
+          yellow: 50
+          red: 100

@@ -1,0 +1,52 @@
+# De Meetbeek: Gateway Node (Heltec V3)
+# Receives LoRa data from Sensor Node and forwards to MQTT/Home Assistant
+# Power: 2×18650 Li-ion + 10W Solar Panel
+# Communication: LoRa (868 MHz) + Wi-Fi + MQTT
+
+substitutions:
+  device_name: "brook_gateway"
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: arduino
+
+# Wi-Fi
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.100
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+# MQTT
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  birth_message:
+    topic: "brook/gateway/status"
+    payload: "online"
+  will_message:
+    topic: "brook/gateway/status"
+    payload: "offline"
+
+# LoRa Configuration
+lora:
+  cs_pin: 8
+  reset_pin: 12
+  dio0_pin: 9
+  busy_pin: 14
+  frequency: 868.1  # EU
+  encryption_key: "00112233445566778899AABBCCDDEEFF"  # MUST MATCH SENSOR NODE
+
+# LoRa Receiver (Forward messages to MQTT)
+lora_receiver:
+  - on_message:
+      then:
+        - mqtt.publish:
+            topic: "brook/sensor_node/data"
+            payload: !lambda 'return x;'
+        - lambda: |-
+            ESP_LOGD("lora", "Received: %s", x.c_str());

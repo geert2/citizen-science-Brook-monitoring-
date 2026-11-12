@@ -1,0 +1,124 @@
+# De Meetbeek: Water Sensor Node (Heltec V3)
+# Measures: Water Level (TL-136), Temperature (DS18B20), EC (SEN0189), Turbidity, Ultrasonic (JSN-SR04T)
+# Power: 2×18650 Li-ion + 10W Solar Panel
+# Communication: LoRa (868 MHz) → Gateway Node
+
+substitutions:
+  device_name: "brook_sensor_node"
+  lora_frequency: "868.1"  # EU frequency
+  lora_cs: "8"
+  lora_reset: "12"
+  lora_dio0: "9"
+  lora_busy: "14"
+  mount_height: "0.5"  # Mount height for ultrasonic sensor (meters)
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  framework:
+    type: arduino
+
+# Disable Wi-Fi (Battery-powered)
+wifi:
+  # Empty = disabled
+
+# Deep Sleep (Save Power)
+deep_sleep:
+  run_duration: 45s  # Wake, read sensors, transmit
+  sleep_duration: 4min 45s
+
+# LoRa Configuration
+lora:
+  cs_pin: ${lora_cs}
+  reset_pin: ${lora_reset}
+  dio0_pin: ${lora_dio0}
+  busy_pin: ${lora_busy}
+  frequency: ${lora_frequency}
+  encryption_key: "00112233445566778899AABBCCDDEEFF"  # CHANGE THIS!
+
+# Sensors
+sensor:
+  # Water Temperature (DS18B20)
+  - platform: dallas_temp
+    address: 0x28FF000000000000  # REPLACE WITH YOUR SENSOR'S ADDRESS
+    name: "${device_name} Water Temperature"
+    id: water_temp
+    filters:
+      - sliding_window_moving_average: 3
+
+  # Water Level (TL-136 via 160Ω resistor)
+  - platform: adc
+    pin: GPIO34
+    name: "${device_name} Water Level Raw"
+    id: level_raw
+    update_interval: 60s
+    on_value:
+      then:
+        - lambda: |-
+            // Formula for 160Ω resistor: h = (V - 0.64) / 2.56
+            float voltage = id(level_raw).state / 1000.0;
+            float level_m = (voltage - 0.64) / 2.56;
+            id(level_meters).publish_state(level_m);
+
+  - platform: template
+    name: "${device_name} Water Level"
+    id: level_meters
+    unit_of_measurement: "m"
+
+  # EC/TDS (SEN0189)
+  - platform: adc
+    pin: GPIO35
+    name: "${device_name} EC Raw"
+    id: ec_raw
+    update_interval: 60s
+    on_value:
+      then:
+        - lambda: |-
+            // Calibration: EC = m * V + b
+            float voltage = id(ec_raw).state / 1000.0;
+            float ec = 2000.0 * voltage - 1000.0;  # ADJUST BASED ON CALIBRATION
+            id(ec_us).publish_state(ec);
+
+  - platform: template
+    name: "${device_name} EC"
+    id: ec_us
+    unit_of_measurement: "µS/cm"
+
+  # Turbidity (DFRobot Gravity)
+  - platform: adc
+    pin: GPIO32
+    name: "${device_name} Turbidity Raw"
+    id: turbidity_raw
+    update_interval: 60s
+    on_value:
+      then:
+        - lambda: |-
+            // Calibration: NTU = m * V + b
+            float voltage = id(turbidity_raw).state / 1000.0;
+            float ntu = 1200.0 * voltage - 120.0;  # ADJUST BASED ON CALIBRATION
+            id(turbidity_ntu).publish_state(ntu);
+
+  - platform: template
+    name: "${device_name} Turbidity"
+    id: turbidity_ntu
+    unit_of_measurement: "NTU"
+
+  # Ultrasonic Water Level (JSN-SR04T)
+  - platform: ultrasonic
+    trigger_pin: GPIO25
+    echo_pin: GPIO26
+    name: "${device_name} Ultrasonic Level Raw"
+    id: ultrasonic_raw
+    update_interval: 60s
+    timeout: 2m
+    filters:
+      - median: 5
+    on_value:
+      then:
+        - lambda: |-
+            float height_m = id(ultrasonic_raw).state / 100.0 - ${mount_height};
+            id(ultrasonic_level_m).publish_state(height_m);
+
+  - platform: template
+    name: "${device_name} Ultrasonic Level"
+    id: ultrasonic_level_m
+    unit_of_measurement: "m"

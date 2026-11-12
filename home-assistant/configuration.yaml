@@ -1,0 +1,68 @@
+# De Meetbeek: Home Assistant Configuration
+mqtt:
+  broker: 192.168.1.10
+  username: mqtt_user
+  password: mqtt_password
+  discovery: true
+
+sensor:
+  # Water Level (TL-136)
+  - platform: mqtt
+    name: "De Meetbeek Water Level"
+    state_topic: "brook/sensor_node/data"
+    value_template: "{{ value_json['Water Level'] | float }}"
+    unit_of_measurement: "m"
+    device_class: distance
+
+  # Water Temperature (DS18B20)
+  - platform: mqtt
+    name: "De Meetbeek Water Temperature"
+    state_topic: "brook/sensor_node/data"
+    value_template: "{{ value_json['Water Temperature'] | float }}"
+    unit_of_measurement: "°C"
+    device_class: temperature
+
+  # EC (SEN0189)
+  - platform: mqtt
+    name: "De Meetbeek EC"
+    state_topic: "brook/sensor_node/data"
+    value_template: "{{ value_json['EC'] | float }}"
+    unit_of_measurement: "µS/cm"
+
+  # Turbidity
+  - platform: mqtt
+    name: "De Meetbeek Turbidity"
+    state_topic: "brook/sensor_node/data"
+    value_template: "{{ value_json['Turbidity'] | float }}"
+    unit_of_measurement: "NTU"
+
+  # Ultrasonic Level (Backup)
+  - platform: mqtt
+    name: "De Meetbeek Ultrasonic Level"
+    state_topic: "brook/sensor_node/data"
+    value_template: "{{ value_json['Ultrasonic Level'] | float }}"
+    unit_of_measurement: "m"
+    device_class: distance
+
+  # Air Quality (SDS011)
+  - platform: mqtt
+    name: "De Meetbeek PM2.5"
+    state_topic: "brook/air_quality/pm25"
+    value_template: "{{ value | float }}"
+    unit_of_measurement: "µg/m³"
+    device_class: pm25
+
+  - platform: mqtt
+    name: "De Meetbeek PM10"
+    state_topic: "brook/air_quality/pm10"
+    value_template: "{{ value | float }}"
+    unit_of_measurement: "µg/m³"
+    device_class: pm10
+
+binary_sensor:
+  - platform: mqtt
+    name: "De Meetbeek Gateway Status"
+    state_topic: "brook/gateway/status"
+    payload_on: "online"
+    payload_off: "offline"
+    device_class: connectivity

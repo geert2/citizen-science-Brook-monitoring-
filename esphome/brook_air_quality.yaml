@@ -1,0 +1,115 @@
+# De Meetbeek: Air Quality Node (ESP32)
+# Measures: PM2.5/PM10 (SDS011), Temperature/Humidity/Pressure (BME280)
+# Power: 5V (XL6009 Boost from 2×18650)
+# Communication: Wi-Fi → Home Assistant + sensor.community
+
+substitutions:
+  device_name: "brook_air_quality"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Wi-Fi
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.101
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+# MQTT (Optional, for Home Assistant)
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+
+# UART for SDS011
+uart:
+  - id: uart_sds
+    baud_rate: 9600
+    rx_pin: GPIO16
+    tx_pin: GPIO17
+
+# I2C for BME280
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# Sensors
+sensor:
+  # SDS011 (PM2.5/PM10)
+  - platform: sds011
+    uart_id: uart_sds
+    pm_2_5:
+      name: "${device_name} PM2.5"
+      id: pm25
+      filters:
+        - sliding_window_moving_average: 3
+    pm_10_0:
+      name: "${device_name} PM10"
+      id: pm10
+      filters:
+        - sliding_window_moving_average: 3
+    update_interval: 300s  # 5 minutes (duty cycle)
+    on_value:
+      then:
+        - lambda: |-
+            if (id(pm25).has_state() && id(pm10).has_state()) {
+              id(send_to_sensor_community).execute(id(pm25).state, id(pm10).state);
+            }
+
+  # BME280 (Temperature, Humidity, Pressure)
+  - platform: bme280
+    address: 0x76
+    temperature:
+      name: "${device_name} Air Temperature"
+      id: air_temp
+      filters:
+        - sliding_window_moving_average: 3
+    humidity:
+      name: "${device_name} Humidity"
+      id: humidity
+      filters:
+        - sliding_window_moving_average: 3
+    pressure:
+      name: "${device_name} Pressure"
+      id: pressure
+      filters:
+        - sliding_window_moving_average: 3
+    update_interval: 60s
+
+# HTTP Request for sensor.community
+http_request:
+  useragent: "ESPHome-SDS011"
+  timeout: 10s
+
+# Lambda to send data to sensor.community
+lambda: |-
+  auto send_to_sensor_community = [](float pm25, float pm10) {
+    std::string payload = R"({
+      "software_version": "ESPHome-1.0",
+      "sensor": {
+        "sensor_type": "SDS011",
+        "pin": "1",
+        "model": "SDS011"
+      },
+      "sensordatavalues": [
+        {"value_type": "P1", "value": )" + to_string(pm10) + R"("},
+        {"value_type": "P2", "value": )" + to_string(pm25) + R"("},
+        {"value_type": "temperature", "value": )" + to_string(id(air_temp).state) + R"("},
+        {"value_type": "humidity", "value": )" + to_string(id(humidity).state) + R"("},
+        {"value_type": "pressure", "value": )" + to_string(id(pressure).state / 100.0) + R"("}
+      ]
+    })";
+    auto req = id(http_request).make_request();
+    req->set_url("https://api.sensor.community/v1/push-sensor-data/");
+    req->set_method("POST");
+    req->set_header("Content-Type", "application/json");
+    req->set_body(payload);
+    req->perform();
+  };
+  id(send_to_sensor_community) = send_to_sensor_community;
