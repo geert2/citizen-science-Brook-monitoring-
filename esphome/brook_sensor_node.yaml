@@ -1,7 +1,7 @@
 # De Meetbeek: Water Sensor Node (Heltec V3)
 # Measures: Water Level (TL-136), Temperature (DS18B20), EC (SEN0189), Turbidity, Ultrasonic (JSN-SR04T)
-# Power: 2×18650 Li-ion + 10W Solar Panel
-# Communication: LoRa (868 MHz) → Gateway Node
+# Power: 2x18650 Li-ion + 10W Solar Panel
+# Communication: LoRa (868 MHz) -> Gateway Node
 
 substitutions:
   device_name: "brook_sensor_node"
