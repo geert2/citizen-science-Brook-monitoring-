@@ -3,17 +3,22 @@
 *.elf
 *.hex
 *.uf2
-.esphome/
 build/
 
 # Secrets
 secrets.yaml
-*.secret
+!secrets.yaml.example
 
 # IDE
-.vscode/
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log

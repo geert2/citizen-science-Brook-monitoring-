@@ -1,7 +1,7 @@
 # De Meetbeek: Air Quality Node (ESP32)
 # Measures: PM2.5/PM10 (SDS011), Temperature/Humidity/Pressure (BME280)
-# Power: 5V (XL6009 Boost from 2×18650)
-# Communication: Wi-Fi → Home Assistant + sensor.community
+# Power: 5V (XL6009 Boost from 2x18650)
+# Communication: Wi-Fi -> Home Assistant + sensor.community
 
 substitutions:
   device_name: "brook_air_quality"
