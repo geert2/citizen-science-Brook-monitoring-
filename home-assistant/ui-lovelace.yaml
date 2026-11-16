@@ -1,119 +1,119 @@
-# De Meetbeek: Lovelace Dashboard
-# This file defines a dedicated dashboard for your brook monitoring station
-
-title: De Meetbeek Monitoring
+# De Meetbeek - Lovelace dashboard (raw configuration mode)
+# Entity IDs assume the ESPHome devices are named as in esphome/*.yaml
+# (friendly_name "De Meetbeek"). If a card shows "Entity not available", look up
+# the real ID in Home Assistant > Developer tools > States and adjust it here.
+title: De Meetbeek
 views:
-  # --- View 1: Water Quality ---
-  - title: Water Quality
+  - title: Water
     icon: mdi:water
     cards:
-      - type: picture-glance
-        image: /local/brook.jpg  # Add your own image later
-        title: De Grote Beek
-        entities:
-          - sensor.de_meetbeek_water_level
-          - sensor.de_meetbeek_water_temperature
-          - sensor.de_meetbeek_ec
-          - sensor.de_meetbeek_turbidity
-
       - type: gauge
         entity: sensor.de_meetbeek_water_level
-        name: Water Level
+        name: Water level
+        unit: m
         min: 0
         max: 1
-        unit: m
-        severity:
-          green: 0
-          yellow: 0.5
-          red: 0.8
+        severity: {green: 0, yellow: 0.5, red: 0.8}
 
       - type: gauge
         entity: sensor.de_meetbeek_ec
-        name: Electrical Conductivity
+        name: Conductivity (25 °C)
+        unit: µS/cm
         min: 0
         max: 2000
-        unit: µS/cm
-        severity:
-          green: 0
-          yellow: 700
-          red: 1200
+        severity: {green: 0, yellow: 900, red: 1400}
 
       - type: gauge
         entity: sensor.de_meetbeek_turbidity
-        name: Turbidity
-        min: 0
-        max: 3000
+        name: Turbidity (index)
         unit: NTU
-        severity:
-          green: 0
-          yellow: 50
-          red: 100
+        min: 0
+        max: 500
+        severity: {green: 0, yellow: 50, red: 150}
+
+      - type: entities
+        title: Current values
+        entities:
+          - sensor.de_meetbeek_water_temperature
+          - sensor.de_meetbeek_ultrasonic_level
+          - sensor.de_meetbeek_node_battery
 
       - type: history-graph
+        title: Level - pressure sensor vs ultrasonic (should agree)
+        hours_to_show: 48
         entities:
           - sensor.de_meetbeek_water_level
           - sensor.de_meetbeek_ultrasonic_level
-        title: Water Level (TL-136 vs. Ultrasonic)
-        hours_to_show: 24
 
-  # --- View 2: Air Quality ---
-  - title: Air Quality
+      - type: history-graph
+        title: Conductivity and turbidity (7 days)
+        hours_to_show: 168
+        entities:
+          - sensor.de_meetbeek_ec
+          - sensor.de_meetbeek_turbidity
+
+  - title: Air
     icon: mdi:air-filter
     cards:
-      - type: picture-glance
-        image: /local/air_quality.jpg
-        title: Air Quality at De Grote Beek
-        entities:
-          - sensor.de_meetbeek_pm2_5
-          - sensor.de_meetbeek_pm10
-          - sensor.de_meetbeek_air_temperature
-          - sensor.de_meetbeek_humidity
-
       - type: gauge
         entity: sensor.de_meetbeek_pm2_5
         name: PM2.5
+        unit: µg/m³
         min: 0
         max: 100
-        unit: µg/m³
-        severity:
-          green: 0
-          yellow: 25
-          red: 50
+        severity: {green: 0, yellow: 15, red: 35}
 
       - type: gauge
         entity: sensor.de_meetbeek_pm10
         name: PM10
+        unit: µg/m³
         min: 0
         max: 200
-        unit: µg/m³
-        severity:
-          green: 0
-          yellow: 50
-          red: 100
+        severity: {green: 0, yellow: 45, red: 90}
+
+      - type: entities
+        title: Weather at the sensor
+        entities:
+          - sensor.de_meetbeek_air_temperature
+          - sensor.de_meetbeek_humidity
+          - sensor.de_meetbeek_pressure
 
       - type: history-graph
+        title: Particulate matter (24 h)
+        hours_to_show: 24
         entities:
           - sensor.de_meetbeek_pm2_5
           - sensor.de_meetbeek_pm10
-        title: Particulate Matter (24h)
-        hours_to_show: 24
+          - sensor.de_meetbeek_humidity
 
-  # --- View 3: System Status ---
-  - title: System Status
-    icon: mdi:server
+  - title: System health
+    icon: mdi:heart-pulse
     cards:
       - type: entities
-        title: Gateway & Sensors
+        title: Link and data quality
         entities:
-          - binary_sensor.de_meetbeek_gateway_status
-          - sensor.de_meetbeek_water_level
-          - sensor.de_meetbeek_ultrasonic_level
-          - sensor.de_meetbeek_pm2_5
+          - binary_sensor.de_meetbeek_node_online
+          - sensor.de_meetbeek_node_battery
+          - sensor.de_meetbeek_qc_flags
+          - sensor.de_meetbeek_readings_lost
+          - sensor.de_meetbeek_node_resets
+          - sensor.de_meetbeek_lora_rssi
+          - sensor.de_meetbeek_lora_snr
+          - sensor.de_meetbeek_level_loop_current
+          - sensor.de_meetbeek_ec_raw_voltage
+          - sensor.de_meetbeek_turbidity_raw_voltage
 
       - type: history-graph
-        entities:
-          - sensor.de_meetbeek_water_level
-          - sensor.de_meetbeek_ec
-          - sensor.de_meetbeek_turbidity
-        title: Water Quality Trends (7 Days)
+        title: Battery and signal (7 days)
         hours_to_show: 168
+        entities:
+          - sensor.de_meetbeek_node_battery
+          - sensor.de_meetbeek_lora_rssi
+
+      - type: markdown
+        title: QC flags (sum of the active bits)
+        content: >
+          **1** level loop out of range or wire break · **2** EC out of range ·
+          **4** turbidity invalid · **8** water temperature invalid ·
+          **16** no ultrasonic echo · **32** low battery (&lt;3.3 V) ·
+          **64** EC not yet calibrated · **128** turbidity not yet calibrated

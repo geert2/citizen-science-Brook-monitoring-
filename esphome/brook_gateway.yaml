@@ -1,0 +1,332 @@
+# =============================================================================
+# De Meetbeek - GATEWAY
+# Board  : Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262), powered from mains USB
+# Job    : receive raw LoRa packets from the water node, APPLY CALIBRATION,
+#          run simple quality checks, publish to Home Assistant (+ optional MQTT).
+#
+# ALL CALIBRATION CONSTANTS LIVE IN THE "substitutions" BLOCK BELOW.
+# After changing them, just re-flash the gateway (over Wi-Fi/OTA). The node at
+# the stream never needs to be touched. See docs/calibration.md.
+#
+# Sensors: SEN0244 (EC/TDS) and SEN0189 (turbidity) are both DFRobot Gravity analog sensors.
+#
+# Incoming payload (from brook_sensor_node.yaml):
+#   B1,seq,vbat,water_temp,v_loop,v_ec,v_turb,dist_m      (-999 = no reading)
+# =============================================================================
+
+substitutions:
+  device_name: brook-gateway
+  friendly: "De Meetbeek"
+
+  # --- Radio: MUST be identical in the node file ------------------------------
+  lora_frequency_hz: "869525000"
+  lora_spreading_factor: "9"
+  lora_tx_power_dbm: "14"
+
+  # --- Node considered offline after this many milliseconds without data ------
+  offline_after_ms: "1200000"      # 20 min (4 missed 5-minute cycles)
+
+  # --- TL-136 level (4-20 mA loop through a shunt resistor) -------------------
+  tl136_shunt_ohm: "160.0"         # MEASURE your resistor with a multimeter
+  tl136_range_m: "1.0"             # full-scale range of your sensor (from datasheet)
+  tl136_zero_offset_m: "0.0"       # added to the level; set by comparing to a ruler
+
+  # --- Ultrasonic JSN-SR04T ---------------------------------------------------
+  us_mount_height_m: "1.00"        # sensor face -> zero level of the staff gauge
+  us_zero_offset_m: "0.0"
+  us_assumed_speed: "343.0"        # speed of sound ESPHome assumes (m/s)
+
+  # --- Electrical conductivity: DFRobot SEN0244 (Gravity analog TDS sensor) ----
+  # The sensor's transfer curve is a cubic polynomial (DFRobot's published curve).
+  # One calibration factor "ec_k_factor" corrects your individual probe, measured
+  # in a 1413 uS/cm standard (see docs/calibration.md). Output is EC at 25 C, uS/cm.
+  ec_calibrated: "0"               # set to "1" once ec_k_factor is YOURS
+  ec_k_factor: "1.0"
+  ec_temp_coeff: "0.02"            # 2 % per degree C
+
+  # --- Turbidity (relative index; output voltage FALLS as water gets cloudier) -
+  ntu_calibrated: "0"              # set to "1" once the values below are YOURS
+  ntu_divider: "2.0"               # 10k/10k divider on the node: sensor V = ADC V x 2
+  ntu_cal_v_clear: "4.10"          # sensor volts in clear water (0 NTU)
+  ntu_cal_v_ref: "3.50"            # sensor volts in the reference standard
+  ntu_cal_ref: "100.0"             # value of that reference standard
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly}
+  on_boot:
+    priority: -100
+    then:
+      - sx126x.set_mode_rx
+
+esp32:
+  board: heltec_wifi_lora_32_V3
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    encryption:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Tip: give this device a fixed address in your router (DHCP reservation)
+  ap:
+    ssid: "brook-gateway-fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# Optional open-data output. Delete this block if you do not run an MQTT broker.
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  topic_prefix: brook/gateway
+  discovery: false                 # Home Assistant already gets the data via the API
+
+globals:
+  - id: have_rx
+    type: bool
+    initial_value: 'false'
+  - id: last_seq
+    type: uint32_t
+    initial_value: '0'
+  - id: last_rx_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: lost_total
+    type: int
+    initial_value: '0'
+  - id: reset_total
+    type: int
+    initial_value: '0'
+
+# --- LoRa radio (pins fixed on the Heltec V3) --------------------------------
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+sx126x:
+  id: radio
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  frequency: ${lora_frequency_hz}
+  modulation: LORA
+  bandwidth: 125_0kHz
+  spreading_factor: ${lora_spreading_factor}
+  coding_rate: CR_4_6
+  preamble_size: 8
+  sync_value: [0x14, 0x24]
+  crc_enable: true
+  pa_power: ${lora_tx_power_dbm}
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  tcxo_delay: 5ms
+  on_packet:
+    then:
+      - lambda: |-
+          std::string msg(x.begin(), x.end());
+          unsigned int seq = 0;
+          float vbat, wt, vloop, vec, vnt, dist;
+          if (sscanf(msg.c_str(), "B1,%u,%f,%f,%f,%f,%f,%f",
+                     &seq, &vbat, &wt, &vloop, &vec, &vnt, &dist) != 7) {
+            ESP_LOGW("brook", "Ignoring unknown packet (RSSI %.0f dBm)", rssi);
+            return;
+          }
+
+          // ---- duplicate / loss / reset bookkeeping --------------------------
+          if (id(have_rx) && seq == id(last_seq)) {
+            return;                                   // second copy of same reading
+          }
+          if (id(have_rx)) {
+            if (seq > id(last_seq)) id(lost_total) += (int) (seq - id(last_seq) - 1);
+            else id(reset_total) += 1;                // counter went back: node rebooted
+          }
+          id(last_seq) = seq;
+          id(have_rx) = true;
+          id(last_rx_ms) = millis();
+
+          auto nz = [](float x) { return x <= -998.0f ? NAN : x; };
+          vbat = nz(vbat); wt = nz(wt); vloop = nz(vloop);
+          vec = nz(vec); vnt = nz(vnt); dist = nz(dist);
+
+          int flags = 0;
+
+          // ---- TL-136 level ---------------------------------------------------
+          float ma = vloop / ${tl136_shunt_ohm} * 1000.0f;
+          float level = (ma - 4.0f) / 16.0f * ${tl136_range_m} + ${tl136_zero_offset_m};
+          if (std::isnan(ma) || ma < 3.6f || ma > 21.0f) flags |= 1;   // wire break / short
+
+          // ---- Water temperature ---------------------------------------------
+          if (std::isnan(wt) || wt < -2.0f || wt > 35.0f) flags |= 8;
+
+          // ---- EC (SEN0244): compensate the VOLTAGE to 25 C, then the cubic curve ----
+          const float a = ${ec_temp_coeff};
+          float vc = std::isnan(wt) ? NAN : vec / (1.0f + a * (wt - 25.0f));
+          float ec25 = ${ec_k_factor} * (133.42f * vc * vc * vc - 255.86f * vc * vc + 857.39f * vc);
+          if (std::isnan(ec25) || ec25 < 0.0f || ec25 > 2200.0f) flags |= 2;   // sensor range ~0-2000
+
+          // ---- Turbidity (relative index) ------------------------------------
+          float vs = vnt * ${ntu_divider};
+          float ntu = ${ntu_cal_ref} * (${ntu_cal_v_clear} - vs) /
+                      (${ntu_cal_v_clear} - ${ntu_cal_v_ref});
+          if (!std::isnan(ntu) && ntu < 0.0f) ntu = 0.0f;
+          if (std::isnan(ntu) || ntu > 4000.0f) flags |= 4;
+
+          // ---- Ultrasonic level (speed of sound corrected; water temp as proxy)
+          float t_air = std::isnan(wt) ? 10.0f : wt;
+          float c = 331.3f + 0.606f * t_air;
+          float d = dist * c / ${us_assumed_speed};
+          float us_level = ${us_mount_height_m} - d + ${us_zero_offset_m};
+          if (std::isnan(d) || d < 0.25f) flags |= 16;                  // no echo / blind zone
+
+          if (std::isnan(vbat) || vbat < 3.3f) flags |= 32;             // low battery
+          if (${ec_calibrated} == 0) flags |= 64;                       // EC not calibrated
+          if (${ntu_calibrated} == 0) flags |= 128;                     // turbidity not calibrated
+
+          // ---- publish ----------------------------------------------------------
+          id(level_m).publish_state(level);
+          id(loop_ma).publish_state(ma);
+          id(us_level_m).publish_state(us_level);
+          id(water_temp).publish_state(wt);
+          id(ec_us).publish_state(ec25);
+          id(ec_raw_v).publish_state(vec);
+          id(turbidity_ntu).publish_state(ntu);
+          id(turb_raw_v).publish_state(vs);
+          id(battery_v).publish_state(vbat);
+          id(rssi_dbm).publish_state(rssi);
+          id(snr_db).publish_state(snr);
+          id(qc_flags).publish_state(flags);
+          id(packets_lost).publish_state(id(lost_total));
+          id(node_resets).publish_state(id(reset_total));
+          ESP_LOGI("brook", "seq %u level %.3f m, EC %.0f, NTU %.1f, T %.1f, batt %.2f V, flags %d",
+                   seq, level, ec25, ntu, wt, vbat, flags);
+
+# --- Entities shown in Home Assistant ----------------------------------------
+sensor:
+  - platform: template
+    id: level_m
+    name: "Water Level"
+    unit_of_measurement: "m"
+    device_class: distance
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    id: us_level_m
+    name: "Ultrasonic Level"
+    unit_of_measurement: "m"
+    device_class: distance
+    state_class: measurement
+    accuracy_decimals: 3
+
+  - platform: template
+    id: water_temp
+    name: "Water Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    id: ec_us
+    name: "EC"
+    unit_of_measurement: "µS/cm"
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: turbidity_ntu
+    name: "Turbidity"
+    unit_of_measurement: "NTU"
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    id: battery_v
+    name: "Node Battery"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: template
+    id: qc_flags
+    name: "QC Flags"
+    state_class: measurement
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+  - platform: template
+    id: loop_ma
+    name: "Level Loop Current"
+    unit_of_measurement: "mA"
+    device_class: current
+    accuracy_decimals: 2
+    entity_category: diagnostic
+
+  # Raw voltages are kept so any value can be recalculated after re-calibration
+  - platform: template
+    id: ec_raw_v
+    name: "EC Raw Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 4
+    entity_category: diagnostic
+
+  - platform: template
+    id: turb_raw_v
+    name: "Turbidity Raw Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 3
+    entity_category: diagnostic
+
+  - platform: template
+    id: rssi_dbm
+    name: "LoRa RSSI"
+    unit_of_measurement: "dBm"
+    device_class: signal_strength
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+  - platform: template
+    id: snr_db
+    name: "LoRa SNR"
+    unit_of_measurement: "dB"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+
+  - platform: template
+    id: packets_lost
+    name: "Readings Lost"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+  - platform: template
+    id: node_resets
+    name: "Node Resets"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+binary_sensor:
+  - platform: template
+    name: "Node Online"
+    device_class: connectivity
+    lambda: |-
+      if (!id(have_rx)) return false;
+      return (uint32_t) (millis() - id(last_rx_ms)) < ${offline_after_ms};
