@@ -65,7 +65,8 @@ flowchart LR
 | 12 V solar panel (about 10 W) + **CN3791** MPPT charger | solar charging |
 | 2 × 18650 cells in **parallel**, protected, plus 2 A fuse | battery |
 | 2 × **MT3608** boost module (one set to 5 V, one to about 15 V) | sensor supplies, powered through the Heltec Vext switch so they are off during sleep (XL6009 cannot be used: its minimum input is 5 V) |
-| *(only if needed, see wiring.md options B/C)* AO3401 P-MOSFET + 2N7002 or BC327 + BC337; resistors (160 Ω shunt, 100 Ω, 1 kΩ, 2 kΩ, 4.7 kΩ, 2 × 10 kΩ, 2 × 100 kΩ), 100 µF capacitors | power switch, shunt, dividers |
+| **120 Ω** 1 % resistor, 4.7 kΩ resistor, *(optional)* BAT54S dual Schottky diode | TL-136 shunt and `A0` input protection |
+| *(only if needed, see wiring.md options B/C)* AO3401 P-MOSFET + 2N7002 or BC327 + BC337; resistors (100 Ω, 1 kΩ, 2 kΩ, 4.7 kΩ, 2 × 10 kΩ, 2 × 100 kΩ), 100 µF capacitors | power switch, dividers |
 | ESP32 DevKit, SDS011, BME280 | air quality node (5 V USB supply) |
 | IP66 enclosures, cable glands, desiccant | housing |
 

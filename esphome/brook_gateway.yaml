@@ -27,7 +27,7 @@ substitutions:
   offline_after_ms: "1200000"      # 20 min (4 missed 5-minute cycles)
 
   # --- TL-136 level (4-20 mA loop through a shunt resistor) -------------------
-  tl136_shunt_ohm: "160.0"         # MEASURE your resistor with a multimeter
+  tl136_shunt_ohm: "120.0"         # MEASURE your resistor with a multimeter (120 Ω nominal)
   tl136_range_m: "1.0"             # full-scale range of your sensor (from datasheet)
   tl136_zero_offset_m: "0.0"       # added to the level; set by comparing to a ruler
 

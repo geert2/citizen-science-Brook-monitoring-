@@ -21,11 +21,12 @@ fails, fix it before continuing.
 ## C. Sensors, one by one (values from the node log, `-999` = not connected)
 - [ ] **Battery:** `vbat` matches a multimeter within about 0.1 V.
 - [ ] **DS18B20:** water temperature is plausible (room temperature in air; warms in your hand).
-- [ ] **TL-136:** in air the loop voltage is about 0.64 V (4 mA × 160 Ω). Lifting the probe
+- [ ] **TL-136:** in air the loop voltage is about 0.48 V (4 mA × 120 Ω). Lifting the probe
       out of water returns it there. Under about 3.6 mA means a wiring fault.
 - [ ] **Loop booster:** measure the booster output (about 15 V) before connecting the sensor,
       and the supply at the sensor terminals (should be at least the sensor's minimum, with
-      the loop at 20 mA).
+      the loop at 20 mA). With a 120 Ω shunt and 15 V expect about 12.6 V; under 12 V see
+      wiring.md section 2.
 - [ ] **SEN0244 (EC):** voltage in distilled water is near zero and rises in tap water
       (tap water is typically a few hundred µS/cm, giving roughly 0.6–1.0 V). A stronger
       solution (1413 µS/cm, about 1.7 V) gives a higher voltage.

@@ -59,20 +59,33 @@ available at every wake-up.
 
 ```
 ~15 V booster out ──► TL-136 (+)
-                      TL-136 (−) ──┬──► 160 Ω shunt ──► GND
+                      TL-136 (−) ──┬──► 120 Ω shunt ──► GND
                                    │
-                                   └──► 1 kΩ ──► ADS1115 A0
+                                   └──► 4.7 kΩ ──┬──► ADS1115 A0
+                                                 │
+                                   (optional) BAT54S clamp: A0 → GND and A0 → 3V3
 ```
 
-* Shunt: **160 Ω** (the one you already have, 1 % is fine). 4 mA gives 0.64 V and 20 mA gives
-  3.2 V. The ADS1115 is powered from 3.3 V and tolerates inputs up to 3.6 V, so 3.2 V is fine.
-  (A normal ESP32 ADC could not do this, the ADS1115 can.) The 1 kΩ series resistor protects
-  the input if something goes wrong. **Measure the real resistance** with a multimeter and
-  enter it as `tl136_shunt_ohm` in the gateway file.
-* **Loop supply voltage:** at 20 mA the shunt eats 3.2 V, so the sensor itself gets the booster
-  voltage minus 3.2 V. Look up the minimum supply voltage of your TL-136 (typically 9–12 V).
-  With the booster set to **15 V** the sensor has about 11.8 V at full scale. Do not set it
-  above the sensor's maximum supply voltage (typically 30 V or more).
+* Shunt: **120 Ω** (1 % is fine). 4 mA gives 0.48 V and 20 mA gives 2.4 V, well inside the
+  ADS1115's ±4.096 V range (it is powered from 3.3 V and must never see more than 3.6 V on an
+  input). **Measure the real resistance** with a multimeter and enter it as `tl136_shunt_ohm`
+  in the gateway file.
+* **Loop supply voltage:** at 20 mA the shunt takes 20 mA × 120 Ω = 2.4 V, so the sensor gets
+  the booster voltage minus 2.4 V. With the booster at **15 V** that is **12.6 V at full
+  scale**, exactly where the level is highest. There is no authoritative TL-136 datasheet:
+  seller manuals list **12–32 V**, so read the label on your unit and treat **12 V as the
+  minimum**. Do not set the booster above the sensor's maximum (typically 30 V or more).
+  - *Already built with 160 Ω?* Then the sensor gets only 15 − 3.2 = 11.8 V at 20 mA. Either
+    swap the shunt for 120 Ω (or 100 Ω) or set the loop booster to about **16 V**. A lower
+    shunt costs no extra power; a higher booster voltage adds load on Vext (section 3).
+* **Input protection (4.7 kΩ series resistor, optional clamp).** If the shunt breaks open, the
+  loop current is pushed into `A0` instead of to ground. The TL-136 limits that current and
+  the ADS1115's internal diodes pass it to 3V3, but the 4.7 kΩ resistor keeps it to about
+  2–3 mA even in the worst case (15 V booster, sensor shorted), well under the ADS1115's
+  10 mA continuous limit. For extra margin, fit a **BAT54S** (dual Schottky, SOT-23): its
+  middle pin on `A0`, one end on `GND`, the other on `3V3`. The ADS1115 input impedance
+  is several megohms, so 4.7 kΩ adds well under 0.2 % error; a two-point check
+  (calibration.md, section 1, step 5) catches it.
 * The booster is only on while the node is awake.
 * Check whether your TL-136 cable has a **vent tube** (atmospheric reference). Do not seal it;
   use a desiccant cap.

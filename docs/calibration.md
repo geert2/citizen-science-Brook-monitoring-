@@ -20,7 +20,7 @@ For faster testing temporarily set `sleep_time: 15s`.
 1. Measure the shunt resistor with a multimeter, set `tl136_shunt_ohm`.
 2. Set `tl136_range_m` to the sensor's full-scale range (datasheet, e.g. 1.0 for 0–1 m).
 3. With the sensor in air (or at your zero level) the loop current should be about 4 mA
-   (`Level Loop Current` in Home Assistant, 0.64 V across the 160 Ω shunt). A reading below
+   (`Level Loop Current` in Home Assistant, 0.48 V across the 120 Ω shunt). A reading below
    3.6 mA means a broken wire.
 4. Put the sensor at a known depth (bucket + ruler, or the stream staff gauge). Compare and
    set `tl136_zero_offset_m` = true level − displayed level.
