@@ -19,13 +19,13 @@ d.text(158, 76, '+', 12, 'start', 'bold'); d.text(252, 76, '−', 12, 'end', 'bo
 d.wire([(260, 82), (310, 82)], 'black'); d.dot(310, 82)
 d.wire([(310, 82), (365, 82), (365, 112)], 'black'); d.resv(365, 112, 140)
 d.wire([(365, 140), (365, 166)], 'black'); d.gnd(365, 166)
-d.text(378, 130, '160 Ω', 11, 'start'); d.text(378, 144, 'shunt', 11, 'start', fill='#555555')
+d.text(378, 130, '120 Ω', 11, 'start'); d.text(378, 144, 'shunt', 11, 'start', fill='#555555')
 d.wire([(310, 82), (310, 150), (225, 150)], 'black'); d.wire([(225, 150), (214, 150)], 'black')
 d.resh(190, 214, 150); d.wire([(190, 150), (115, 150)], 'blue')
 d.wire([(310, 150), (225, 150)], 'blue')
-d.text(202, 138, '1 kΩ', 11)
-d.text(130, 190, 'A0 reads the voltage across 160 Ω:', 11, 'start', fill='#555555')
-d.text(130, 205, '0.64 V (4 mA) … 3.2 V (20 mA)', 11, 'start', fill='#555555')
+d.text(202, 138, '4.7 kΩ', 11)
+d.text(130, 190, 'A0 reads the voltage across 120 Ω:', 11, 'start', fill='#555555')
+d.text(130, 205, '0.48 V (4 mA) … 2.4 V (20 mA)', 11, 'start', fill='#555555')
 
 # --- A1: SEN0244
 d.box(250, 222, 150, 78, '#fff8e6', '#555555')
