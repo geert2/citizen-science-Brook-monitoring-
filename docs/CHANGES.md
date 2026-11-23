@@ -12,4 +12,4 @@ A simple brook station as a first step towards the full station on `main`. It is
 * **Docs:** field guide rewritten for a brook (stilling pipe, staff gauge, permission, flood checks, monthly cleaning, power budget at 10 minutes), BOM (2 × 18650 in parallel, stilling pipe, conduit, post, staff gauge), new installation diagram.
 * Includes the two compile fixes found in the groundwater repo (`random_uint32()`, `token.c_str()`).
 * The full station files of `main` are not on this branch.
-* Validated with ESPHome 2026.11.0 (`esphome config`). Not tested on hardware.
+* Validated with ESPHome 2026.11.0: `esphome config` and `esphome compile` pass in CI for the node and the gateway. Not tested on hardware.
