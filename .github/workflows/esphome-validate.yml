@@ -1,0 +1,62 @@
+name: ESPHome validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  config:
+    name: esphome config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install esphome
+      - name: Create dummy secrets
+        run: |
+          cd esphome
+          KEY=$(openssl rand -base64 32)
+          sed "s|REPLACE_WITH_32_BYTE_BASE64_KEY_HERE==|$KEY|" secrets.yaml.example > secrets.yaml
+          sh sync-secrets.sh
+      - name: Validate configs
+        run: |
+          for f in esphome/nodes/brook-lite-node-*.yaml esphome/gateway/brook-lite-gateway.yaml; do
+            echo "::group::$f"
+            esphome config "$f" > /dev/null
+            echo "::endgroup::"
+          done
+
+  compile:
+    name: esphome compile
+    needs: config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - esphome/nodes/brook-lite-node-1.yaml
+          - esphome/gateway/brook-lite-gateway.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.esphome
+          key: esphome-${{ runner.os }}-${{ hashFiles('esphome/**/*.yaml') }}
+          restore-keys: esphome-${{ runner.os }}-
+      - run: pip install esphome
+      - name: Create dummy secrets
+        run: |
+          cd esphome
+          KEY=$(openssl rand -base64 32)
+          sed "s|REPLACE_WITH_32_BYTE_BASE64_KEY_HERE==|$KEY|" secrets.yaml.example > secrets.yaml
+          sh sync-secrets.sh
+      - name: Compile ${{ matrix.file }}
+        run: esphome compile ${{ matrix.file }}

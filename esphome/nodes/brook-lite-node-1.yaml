@@ -1,0 +1,18 @@
+substitutions:
+  node_name: brook-lite-node-1
+  friendly_name: "Brook Lite Node 1"
+  sleep_minutes: "10"
+
+  # Per-node calibration (see docs/field-guide.md, section 3)
+  # range_m: "2.0"                  # full-scale range printed on your TL-136
+  # shunt_ohm: "100.0"
+  # zero_offset_m: "0.00"
+  # span_scale: "1.000"
+  # ec_gain: "1.000"
+  # ec_offset: "0"
+  # vbat_scale: "4.9"
+  # vbat_ctrl_active_low: "false"   # "true" for Heltec V3.0 / V3.1
+  # bme280_address: "0x76"
+
+packages:
+  base: !include common-brook-node.yaml

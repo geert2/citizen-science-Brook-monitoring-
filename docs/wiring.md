@@ -1,383 +1,104 @@
-# Wiring
+# Wiring Notes (BROOK LITE): Level Channel, Power, EC, BME280 and Pinout
 
-Pictures for every connection are included below (diagrams 1–7, source in `img/src`). Read the text next to each picture too: it explains the part values and the safety notes.
+*`[R#]` tags refer to [REFERENCES.md](REFERENCES.md).*
 
-> **Check before you solder.** The pin numbers below follow the Heltec WiFi LoRa 32 **V3**
-> (ESP32-S3). Board revisions differ slightly (V3, V3.1, V3.2). Compare with the pinout
-> diagram that belongs to *your* board, and bench-test each sensor on its own
-> (see [bench-test.md](bench-test.md)) before putting everything in the box.
+> Not yet tested on hardware. Build one node on the bench and check every voltage before putting the transmitter in the brook.
 
-## 1. Pin plan: water node (Heltec V3)
+## Overview: whole node
 
-The ESP32-S3 has **no** GPIO22, 25, 32, 34 or 35 that can be used for this, which is why the
-original pin list (written for a classic ESP32) did not work.
+![Field node wiring overview](img/node-wiring.svg)
 
-### Used by the board itself, do not use
+*Red = switched 3.3 V (`Vext`), black = GND. Crossing wires are not connected unless a dot is drawn. Diagram sources are plain SVG files in `docs/img/`.*
 
-| GPIO | Function |
-|------|----------|
-| 8, 9, 10, 11, 12, 13, 14 | SX1262 LoRa radio (NSS, SCK, MOSI, MISO, RST, BUSY, DIO1) |
-| 17, 18, 21 | on-board OLED (not used in this project) |
-| 1 | battery voltage sense (ADC) |
-| 37 | enables the battery voltage divider |
-| 36 | **Vext** switch: the board's own switched 3.3 V output (LOW = on). Used here to power the boosters |
-| 0 | PRG button |
-| 35 | on-board LED |
-| 19, 20 | USB |
+## 1. Level channel (TL-136 0-2 m, 4-20 mA loop)
 
-### Proposed external connections
+![Level channel with the ESP32 ADC](img/level-frontend-esp.svg)
 
-![Water node: digital connections (ADS1115, DS18B20, JSN-SR04T)](img/03-water-node-digital.svg)
 
-| Function | GPIO | Notes |
-|----------|------|-------|
-| I2C SDA (ADS1115) | **41** | 16-bit ADC, address 0x48 |
-| I2C SCL (ADS1115) | **42** | |
-| DS18B20 1-Wire | **5** | 4.7 kΩ pull-up to 3V3 |
-| JSN-SR04T trigger | **6** | |
-| JSN-SR04T echo | **7** | through a divider (see below) |
-| Booster power (15 V + 5 V rails) | **36 (Vext)** | the board's built-in switch, no MOSFET needed (section 3) |
-| Spare | 2, 3, 4 (ADC1), 33, 34, 38, 39, 40 | |
+* Use a TL-136 with a **0-2 m** range: a brook rarely changes more than about 2 m, and a smaller range gives finer resolution (16 mA over 2 m, 0.8 mV per mm across 100 Ω). Set `range_m` in the node file (and in the gateway package) if yours differs.
+* Voltage across the shunt: 4 mA = 0.40 V (0 m), 20 mA = 2.00 V (2 m). This stays inside the ESP32-S3 ADC range, unlike 160 Ω (3.2 V).
+* A flood above the range drives the loop slightly above 20 mA (up to the transmitter's limit, typically about 21-22 mA): the node still reports it, and the gateway sets *Level Above Sensor Range*. Most TL-136 units tolerate 1.5-2× their range as overpressure; check your datasheet.
+* The **1 kΩ + zener** protect `GPIO5`. If the transmitter fails short onto the 18 V rail, the zener clamps the pin near 3.6 V and the 1 kΩ limits the current (about 15 mA). Without them an ESP32-S3 pin would see up to 18 V.
+* Check the zener's leakage near 2 V (should be negligible). If the reading at 20 mA is more than about 10 mV low, use a TVS or a BAT54S Schottky clamp (one diode to `GND`, one to `3V3`) instead.
+* The firmware converts the shunt voltage to current with `shunt_ohm` (default 100.0). Measure your actual resistor and set `shunt_ohm: "100.3"` (for example) in the node file.
+* **Valid range:** 3.5 mA to 22 mA. Outside it the node reports *unavailable* (broken wire, short, boost fault).
 
-The analog sensors are read by an external 16-bit **ADS1115**, not the ESP32's own (noisy) ADC:
+### Accuracy note
+The ESP32-S3 ADC reads up to about 3.1 V at 12 dB attenuation [R17] and its reference voltage varies between 1000 and 1200 mV from chip to chip [R16]. In practice that means tens of mV of error, roughly 1-3 cm of water with the 0-2 m sensor. The zero and span calibration against the staff gauge removes most of it. If you need better, the full station on the `main` branch uses an ADS1115.
 
-| ADS1115 input | Signal |
-|---------------|--------|
-| A0 | TL-136 loop voltage (across the shunt resistor) |
-| A1 | SEN0244 TDS/EC sensor output |
-| A2 | SEN0189 turbidity output (after the 2:1 divider) |
-| A3 | spare |
+### Using a 160 Ω shunt instead
+The full station on `main` uses 160 Ω with an ADS1115. With the ESP32 ADC, 160 Ω saturates near 19.5 mA (about 3.1 V [R17][R3]), which is about 1.94 m on a 0-2 m sensor, and floods would no longer be visible. Keep 100 Ω for the lite node.
 
-The ADS1115 is powered from the permanent 3V3 pin (it idles at under 1 µA), so it is
-available at every wake-up.
+## 2. Power
 
-## 2. Sensor circuits
-
-![Water node: analog sensors (TL-136, SEN0244, SEN0189) into the ADS1115](img/04-water-node-analog.svg)
-
-### TL-136 level sensor (4–20 mA, two wires)
-
-```
-~15 V booster out ──► TL-136 (+)
-                      TL-136 (−) ──┬──► 160 Ω shunt ──► GND
-                                   │
-                                   └──► 1 kΩ ──► ADS1115 A0
+```text
+2 x 18650 in parallel --> Heltec battery connector --> 3.3 V regulator --> Vext switch (GPIO36 LOW = ON)
+                                                              |
+                          +-----------------------------------+--------------+--------------+
+                          |                                   |              |              |
+                  [220-470 uF] + MT3608 IN                 BME280       EC module      DS18B20 (+4.7 k pull-up to GPIO4)
+                          |
+                      MT3608 OUT = 18.0 V  --> TL-136 V+
 ```
 
-* Shunt: **160 Ω** (the one you already have, 1 % is fine). 4 mA gives 0.64 V and 20 mA gives
-  3.2 V. The ADS1115 is powered from 3.3 V and tolerates inputs up to 3.6 V, so 3.2 V is fine.
-  (A normal ESP32 ADC could not do this, the ADS1115 can.) The 1 kΩ series resistor protects
-  the input if something goes wrong. **Measure the real resistance** with a multimeter and
-  enter it as `tl136_shunt_ohm` in the gateway file.
-* **Loop supply voltage:** at 20 mA the shunt eats 3.2 V, so the sensor itself gets the booster
-  voltage minus 3.2 V. Look up the minimum supply voltage of your TL-136 (typically 9–12 V).
-  With the booster set to **15 V** the sensor has about 11.8 V at full scale. Do not set it
-  above the sensor's maximum supply voltage (typically 30 V or more).
-* The booster is only on while the node is awake.
-* Check whether your TL-136 cable has a **vent tube** (atmospheric reference). Do not seal it;
-  use a desiccant cap.
-* Set the sensor's range (for example 0–1 m) as `tl136_range_m` in the gateway file.
-
-### DS18B20 water temperature
-
-```
-3V3 ──┬── 4.7 kΩ ──┬── GPIO5
-      │            │
-      └── VCC      DATA        GND ── GND
-```
-
-### SEN0244 TDS / EC sensor (DFRobot Gravity analog TDS)
-
-* Connector (Gravity, 3 pins): the board is marked **A, +, −**: signal, supply, ground (in the
-  DFRobot cable: blue = signal, red = supply, black = ground).
-* Supply: **5 V rail** (3.3–5.5 V allowed, current about 3–6 mA). Signal (0–2.3 V) goes
-  straight to **ADS1115 A1**, ground to GND. No divider is needed.
-* Measuring range is 0–1000 ppm, which is about 0–2000 µS/cm. That fits a Flemish brook
-  (typically several hundred µS/cm). DFRobot quotes an accuracy of ±10 % of full scale,
-  so **always calibrate** (see [calibration.md](calibration.md)).
-* Only the probe goes into the water. Keep the electronics board and connector dry.
-  Check the DFRobot wiki on whether permanent immersion is allowed; if not, mount the probe
-  in a small flow-through bypass or lift it out of the water between campaigns.
-* Keep the signal cable short and away from the loop wires.
-* The part number is **SEN0244**. Please check your package: some shops write it differently.
-
-### SEN0189 turbidity sensor (DFRobot Gravity analog turbidity)
-
-The sensor runs on **5 V** and its output can reach about 4.5 V. That is too high for the
-3.3 V-powered ADS1115, so use a divider:
-
-```
-Sensor OUT ──► 10 kΩ ──┬──► ADS1115 A2
-                       │
-                     10 kΩ
-                       │
-                      GND
-```
-
-* Power from the **5 V booster rail** (it draws up to about 40 mA, so it must be switched off
-  during sleep).
-* The board has a small **slide switch** that selects *analog* or *digital (high/low)* output.
-  It is **not** a power switch. Set it to **analog**, and leave the blue trimmer alone (it only
-  sets the digital threshold).
-* The output voltage **falls** as the water gets cloudier.
-* Mount it in a shaded housing (daylight disturbs the optical measurement).
-
-### JSN-SR04T ultrasonic (level, cross-check)
-
-```
-5 V rail ──► VCC           Echo ──► 1 kΩ ──┬──► GPIO7
-GPIO6 ────► Trig                            │
-GND ──────► GND                           2 kΩ
-                                            │
-                                           GND
-```
-
-* The echo pin outputs 5 V, so the 1 kΩ / 2 kΩ divider brings it to about 3.3 V.
-* The sensor cannot measure closer than about 25 cm: mount it at least that far above the
-  highest water level.
-* Mount it in a short PVC stilling tube so that banks, plants and foam do not cause false echoes.
-
-## 3. Power
-
-![Solar panel, CN3791, two 18650 cells in parallel, fuse, Heltec battery connector](img/01-power-battery.svg)
-
-```
-12 V solar panel ──► CN3791 MPPT charger ──► 2 × 18650 (PARALLEL, protected) ──► BAT+
-                                                                       │
-                           Heltec V3 battery connector ◄───────────────┘   (permanent supply)
-
-   Heltec 3.3 V regulator ──► Vext (switched by GPIO36, built into the board)
-                                       │
-                    ┌──────────────────┴──────────────────┐
-              MT3608 → ~15 V (TL-136 loop)         MT3608 → 5 V (SEN0189, SEN0244, JSN-SR04T)
-```
-
-### Rules
-
-* The CN3791 is a **single-cell** charger. Put the two 18650 cells **in parallel (2P)**,
-  never in series. Use protected cells or a protection board (DW01 type).
-* Add a **2 A fuse** on the battery positive.
-* Li-ion must **not be charged below 0 °C**. Mount the cells inside the enclosure, preferably
-  in a spot that stays above freezing, or choose a CN3791 board with a temperature cut-off.
-* Check the **polarity** of the Heltec battery connector (JST 1.25). Polarity differs between
-  boards and sellers, and a wrong plug can destroy the board.
-* Set the CN3791 MPPT voltage for your panel (about 80 % of the panel's open-circuit voltage).
-* Never power the Heltec without its antenna attached.
-
-### The two boosters: use MT3608, not XL6009
-
-A single Li-ion pack is 3.0–4.2 V. The **XL6009 needs at least 5 V at its input**, so it cannot
-work from this battery (it only worked in the old series-cell design). Use two **MT3608**
-modules (input 2–24 V), one set to 5 V and one set to about 15 V.
-
-| | MT3608 module |
-|---|---|
-| Input voltage | 2 V to 24 V |
-| Output voltage | adjustable, up to 28 V (set with the small trimmer) |
-| Output current | about 0.5 A at 12–15 V from a 3.7 V cell, more at 5 V (plenty for these sensors) |
-| Efficiency | about 85–90 % |
-| Idle consumption | a few mA, which is why we switch the input off during sleep |
-| Cost | about €1 per module |
-
-How to set one:
-
-1. Connect the input to a bench supply or the battery (switch on). **Nothing connected to the output.**
-2. Measure the output with a multimeter and turn the trimmer slowly until you read exactly
-   5.0 V (or 15 V for the loop booster). The turning direction differs between modules,
-   and some modules start at the maximum (28 V!), so never connect a sensor before setting it.
-3. Mark the trimmer with a drop of nail polish so it cannot drift.
-
-A boost converter always passes its input to its output through an internal diode, so you
-cannot switch the *output* off. That is why the switch sits in front of the **input**.
-
-### Switching the boosters
-
-**Why switch at all?** While the node sleeps, everything must be completely off: the turbidity
-sensor alone draws up to 40 mA, and each booster wastes a few mA. The sensor boards
-(SEN0189 and SEN0244) have only power, ground and signal pins and **no enable pin**, so
-they cannot switch themselves off. The switch has to be external.
-
-### Option A (recommended, no extra parts): use the Heltec "Vext" output
-
-![Heltec Vext powering two MT3608 boosters (5 V and about 15 V)](img/02-boosters.svg)
-
-The Heltec V3 already contains a high-side switch for exactly this purpose: **Vext**, a
-switched 3.3 V output controlled by **GPIO36** (LOW = on). Heltec specifies **350 mA** for
-Vext (V3 datasheet). Connect the **inputs of both MT3608 boosters to the Vext pin** and their
-grounds to GND. The firmware already does this (`boost_enable` = GPIO36, inverted).
-
-Current estimate from 3.3 V (the node switches the boosters off before it transmits, so the
-radio current never adds to this):
-
-| Load | Power | From 3.3 V (about 75–80 % efficiency) |
-|------|-------|---------------------------------------|
-| 5 V rail: SEN0189 (≤40 mA) + SEN0244 (3–6 mA) + JSN-SR04T (~10–30 mA) | ~0.3 W | ~110 mA |
-| 15 V loop: TL-136 at 4–20 mA | 0.06–0.30 W | ~25–125 mA |
-| **Total** | | **about 135–235 mA** |
-
-That stays under 350 mA, but not by a huge margin. Things to check:
-
-* **Board version.** The V3/V3.1 switches the 3.3 V line with a MOSFET. The **V3.2 uses a
-  separate small regulator for Vext**. Look up the current rating of that regulator in the
-  schematic for your revision.
-* **Measure it:** put a multimeter in series with the booster inputs and read the current
-  while the node is measuring. If you see random resets (log: "brownout"), the 3.3 V rail is
-  sagging and you need Option B or C.
-* **Sleep:** measure the voltage on the Vext pin while the node sleeps. It must be 0 V.
-* The XL6009 cannot be used here (its minimum input is far above 3.3 V). Use two MT3608.
-* Running the boosters from the 3.3 V regulator instead of straight from the battery costs
-  about 10 % extra battery energy. That is acceptable.
-
-### Option B: a separate MOSFET switch (new to you? read this)
-
-![Optional power switch: MOSFET version (B) and through-hole transistor version (C)](img/07-optional-switch.svg)
-
-Use this if Option A is too close to the limit or your Vext gives resets.
-
-**What is a MOSFET?** A transistor with three legs: *Gate* (the control input), *Source* and
-*Drain* (the current path). Voltage on the gate decides whether current can flow from source
-to drain. It needs almost no current on the gate, and has a very low resistance when on.
-
-* An **N-channel** MOSFET conducts when the gate is *higher* than the source. It is easy to
-  drive from a 3.3 V pin, but it normally switches the ground side.
-* A **P-channel** MOSFET conducts when the gate is *lower* than the source. It is used on the
-  positive side ("high-side"), which is what we need, because the sensors, the ADS1115 and
-  the Heltec must all share the same ground.
-
-**The problem:** a P-MOSFET with its source on the battery (up to 4.2 V) cannot be switched off
-properly by a 3.3 V pin (the gate would still be 0.9 V below the source). So we add a small
-N-MOSFET as a driver:
-
-```
-BAT+ ───────────┬────────────────────────────┐
-                │                            │ Source
-              100 kΩ  (R1)               P-MOSFET  Q1 (AO3401)
-                │                            │ Drain ──► + input of BOTH MT3608 modules
-                ├──────────── Gate ──────────┘
-                │
-              Drain
-        N-MOSFET  Q2 (2N7002)
-              Source ── GND
-              Gate ──┬── 100 Ω (R2) ── GPIO33
-                     │
-                   100 kΩ (R3)
-                     │
-                    GND
-```
-
-How it works:
-
-* **GPIO33 LOW (or asleep):** Q2 is off. R1 keeps the gate of Q1 at battery voltage, so Q1
-  is off. The boosters get no power.
-* **GPIO33 HIGH:** Q2 conducts and pulls the gate of Q1 down to ground. Q1 is now 3–4 V
-  "more negative" than its source and conducts. The boosters are powered.
-* **R3** keeps Q2 off when the pin floats (deep sleep, boot). **R2** limits the current
-  spike into the gate. **R1** keeps Q1 off by default.
-
-**Parts (all common and cheap, about €1 together)**
-
-| Part | Type | Key specs |
-|------|------|-----------|
-| Q1 | P-channel MOSFET **AO3401** (or AO3401A, SI2301, similar) | SOT-23, Vds −30 V, Id about −4 A, on-resistance about 50–60 mΩ at Vgs −4.5 V, gate threshold about −0.7 to −1.3 V. It must be a **logic-level** type |
-| Q2 | N-channel MOSFET **2N7002** | SOT-23, Vds 60 V, gate threshold 1–2.5 V |
-| R1, R3 | 100 kΩ resistor | 1/8 W is enough |
-| R2 | 100 Ω resistor | 1/8 W |
-
-* Both transistors come in **SOT-23**, a tiny surface-mount package. Buy them already soldered on
-  "SOT-23 to DIP" breakout boards, or buy a ready-made **"P-MOSFET high-side switch" module**
-  designed for 3.3 V logic.
-* **Do not use the popular IRF520 or "MOSFET driver" modules**: they need a 10 V gate drive and
-  do not switch properly from a 3.3 V pin. Also avoid ordinary TO-220 P-MOSFETs (IRF9540):
-  they are not logic-level.
-* **Orientation:** the P-MOSFET's **source goes to the battery**, its **drain to the boosters**.
-  If reversed, an internal diode lets current through and the switch never turns off.
-  The pin order of SOT-23 parts differs per manufacturer: check the datasheet of the exact
-  part you bought.
-
-**Test before connecting anything else** (battery or 4 V supply, a multimeter, a 1 kΩ resistor):
-
-1. Connect GPIO33 to GND: the voltage at the Q1 drain stays at about 0 V.
-2. Connect GPIO33 to 3.3 V: the drain jumps to battery voltage minus 0.1 V or less.
-3. Only then connect the MT3608 inputs.
-
-
-**Can't find the parts?** The usual problem is that the SOT-23 transistors are sold bare. Search
-for **"SOT23 to DIP adapter"** or **"SOT-23 breakout PCB"** (packs of 10 cost about €1) and solder
-the transistor onto it, or buy the P-MOSFET together with such a breakout. Common search terms
-for the transistors themselves: "AO3401 SOT-23", "2N7002 SOT-23".
-
-Using Option B in the firmware: in `brook_sensor_node.yaml` change the `boost_enable` pin from
-`GPIO36` (inverted) to `GPIO33` (not inverted).
-
-### Option C: two ordinary through-hole transistors (no SMD at all)
-
-A classic PNP/NPN pair works too. It is a bit less efficient (it drops about 0.3 V and needs
-some base current), but both parts are TO-92 and sold everywhere:
-
-```
-BAT+ ─────────────┬─────────────────────────┐ Emitter
-                  │                         │
-                100 kΩ (R1)             PNP  BC327-40 (Q1)
-                  │                         │ Collector ──► + input of BOTH MT3608 modules
-                  ├────── 330 Ω (R2) ───────┘ Base
-                  │
-              Collector
-            NPN  BC337-40 or 2N2222 (Q2)
-              Emitter ── GND
-              Base ──┬── 4.7 kΩ (R3) ── GPIO33
-                     │
-                   100 kΩ (R4)
-                     │
-                    GND
-```
-
-* GPIO33 HIGH turns Q2 on, which pulls current through R2 out of the base of Q1, and Q1 turns on.
-* R2 sets Q1's base current (about 8 mA, enough for up to about 250 mA load). R1 and R4 keep
-  both transistors off by default, also while the pin floats during deep sleep.
-* The boosters then see about 0.3 V less than the battery. That is fine for the MT3608
-  (minimum input 2 V). Use the same GPIO33 firmware change as in Option B.
-
-
-## 4. Power budget (estimate, verify with a multimeter)
-
-Cycle: 5 minutes, about 15 s awake.
-
-| State | Current at the battery | Time per day | mAh per day |
-|-------|------------------------|--------------|-------------|
-| Deep sleep | ~0.2 mA | ~23.9 h | ~5 |
-| Awake: MCU + radio | ~50 mA (100 mA while transmitting) | 288 × 15 s | ~60 |
-| Awake: sensors and boosters | ~170–200 mA (from the battery, via the Vext regulator) | 288 × 15 s | ~210 |
-| **Total** | | | **~270–300 mAh** |
-
-* 2 × 2500 mAh gives about **14 days** without any sun.
-* A 10 W panel in a Flemish December delivers perhaps 3–5 Wh per day, roughly 1 Ah at
-  battery voltage, so you should have about three times the margin. If your site is shaded
-  or the panel is dirty, move to a 10-minute cycle (`sleep_time: 10min`).
-* These are estimates. The Heltec V3 sleep current is dominated by board components, so
-  measure it yourself (put a multimeter in series with the battery).
-
-## 5. Gateway
-
-![Gateway: Heltec V3, antenna, USB power, Wi-Fi to the router](img/06-gateway.svg)
-
-The gateway needs only the Heltec V3, its antenna and a USB power supply (mains). It must
-**not** run on a small solar panel: with Wi-Fi on and the radio listening it draws about
-100 mA continuously, around 2.4 Ah per day.
-
-## 6. Air quality node (ESP32 DevKit, mains USB)
-
-![Air quality node: ESP32 with SDS011 and BME280](img/05-air-quality-node.svg)
-
-| Function | ESP32 GPIO | Connects to |
-|----------|------------|-------------|
-| UART RX | 16 | SDS011 **TX** |
-| UART TX | 17 | SDS011 **RX** |
-| I2C SDA | 21 | BME280 SDA |
-| I2C SCL | 22 | BME280 SCL |
-| 5 V | VIN / 5V | SDS011 5 V |
-| 3V3 | 3V3 | BME280 VCC |
-| GND | GND | SDS011 GND, BME280 GND |
-
-* Power the node from a **5 V USB supply**. A battery or booster is not needed.
-* Place the SDS011 with its inlet pointing down and away from the box, protected from rain.
-* BME280: if the I2C scan does not find it at 0x76, the address is 0x77.
+* **Battery:** two protected 18650 cells **in parallel** (never in series; the Heltec charges one cell). The 10-minute cycle uses roughly 17-25 mAh per day (field guide, section 6), so 2 × 3000 mAh lasts about 6-9 months. For a 5-minute cycle or year-round operation without battery swaps, add the small solar kit described on `main` (panel + CN3791 MPPT charger).
+* Li-ion must **not be charged below 0 °C**. With solar, use a charger with a temperature cut-off or accept that winter charging stops on frosty days.
+* The 220-470 µF capacitor at the boost input is a precaution against the start-up current spike browning out the ESP32. The MT3608 has internal soft start [R20], so this is a cheap safeguard rather than a fix for a known fault.
+* The TL-136 is listed with a 12 to 32 V supply [R21]; at 18 V a 160 Ω shunt (3.2 V at 20 mA) still leaves about 14.8 V. Check the label of your unit.
+* Set the MT3608 to 18.0 V **before** connecting the TL-136, and re-check after transport (the trimmer drifts).
+* `Vext` is switched on very early at boot (before the sensors are set up), because the BME280 and DS18B20 are detected once during start-up and must already have power.
+* Active energy is dominated by the boost converter. Keep the `warmup` time as short as the transmitter allows (measure how fast the reading settles).
+* **Optional improvement (not in the firmware):** switch the boost converter with its own MOSFET so the EC and temperature probes can be read while the 18 V loop is off. This removes possible stray current in the water and saves energy.
+
+## 3. Pin summary
+
+| Function | Heltec V3 pin | Notes |
+| :--- | :--- | :--- |
+| Vext enable | `GPIO36` | LOW = sensor rail ON |
+| Level signal | `GPIO5` (ADC1) | via 1 kΩ, zener, 100 nF |
+| EC signal | `GPIO6` (ADC1) | analog output of the DFRobot EC/TDS module (0-2.3 V) |
+| DS18B20 data | `GPIO4` | 4.7 kΩ to `Vext` |
+| BME280 SDA / SCL | `GPIO41` / `GPIO42` | separate I²C bus from the onboard OLED, 50 kHz; powered from `Vext` |
+| Battery ADC | `GPIO1` | divider 390 k / 100 k (factor 4.9) |
+| Battery divider enable | `GPIO37` | V3 / V3.1: **LOW** connects the divider; **V3.2: HIGH** [R11][R13]. Set `vbat_ctrl_active_low` |
+| Status LED | `GPIO35` | flashes once at every wake-up |
+| LoRa SX1262 | `GPIO8/9/10/11/12/13/14` | onboard; `tcxo_voltage: 1_8V`, `rf_switch: true` |
+
+Check the battery reading against a multimeter once. If it is off, adjust `vbat_scale` in the node file (default 4.9; a 390 k / 100 k divider [R12], while ESPHome's device page uses 2.0 [R10]).
+
+### Board revision check (do this once per board)
+The polarity of two pins differs between Heltec V3 revisions, and the firmware has two settings for it:
+
+| Setting in the node file | V3.0 / V3.1 | V3.2 | Source |
+| :-- | :-- | :-- | :-- |
+| `vbat_ctrl_active_low` (GPIO37) | `"true"` | `"false"` (default) | [R11] [R13] |
+| `vext_active_low` (GPIO36) | `"true"` (default) | **not confirmed**, check | [R10] [R11] [R14] |
+
+1. Read the revision printed on the board (V3.2 is the current one).
+2. Battery: with the battery connected and the node awake, *Battery Voltage* should match a multimeter within a few percent after adjusting `vbat_scale`. A reading near 0 V means the polarity is wrong (the firmware then ignores the reading and carries on measuring).
+3. Vext: measure between the `Ve` pin and `GND` while the node is awake (it switches `Vext` on in early boot). About 3.3 V means the setting is right. If it reads 0 V, flip `vext_active_low`. Compare with the V3.2 schematic [R14] if in doubt.
+4. A cleaner test: flash a minimal config that only toggles `GPIO36` and `GPIO37` from two buttons or switches, and watch the voltages.
+
+
+## 4. Enclosure
+* Mount the box on a post **above the highest flood level you know of** (ask locals, look for debris lines on the bank). Only the probes may get wet.
+* The TL-136 vent tube must reach **atmospheric pressure**. A sealed box warms in the sun and changes its internal pressure (1 hPa is about 1 cm of water). Fit a **membrane vent plug** to the enclosure and keep the vent tube open inside it, together with a desiccant packet.
+* Never put the antenna's U.FL connector in contact with water; **never power the board without the antenna attached**.
+
+## 5. EC sensor (DFRobot SEN0244 Gravity analog TDS/EC)
+* The **module** (`+` / `-` / `A`) stays in the dry enclosure: `+` to `Vext`, `-` to `GND`, `A` to `GPIO6`. Only the two-wire **probe** goes into the brook.
+* The module runs on 3.3-5.5 V and outputs 0-2.3 V [R19], well inside the ADC range at 12 dB attenuation. It is powered from `Vext`, so it only excites the probe for the second or so of a reading. The module drives the probe with AC, which avoids electrolysis of the electrodes.
+* Extend the probe cable with a **two-core twisted pair** (or screened cable); the probe signal is high-impedance and picks up noise. Waterproof the splice as in section 1 of the field guide.
+* Fix the probe in the stilling pipe at the same height as the DS18B20, which provides the temperature compensation (2 %/°C to 25 °C), and keep the electrodes **a few cm clear of the TL-136 body**.
+* The firmware converts the voltage with DFRobot's cubic curve and then applies `ec_gain` / `ec_offset` from the two-point calibration (field guide, section 3.2). Readings are only meaningful up to about 2000 µS/cm. A Flemish lowland brook is typically a few hundred to about 1000 µS/cm.
+
+## 6. BME280 (air temperature, humidity and pressure)
+* Wire `VIN` to `Vext`, `GND` to `GND`, `SDA` to `GPIO41`, `SCL` to `GPIO42`. It is powered only during a reading, which also avoids self-heating.
+* Mount it **outside the enclosure in a radiation shield** (a small louvred Stevenson-type shield, or a stack of white plant saucers), ideally 1.5 m above ground, above flood level, and on the shaded north side of the post. Without a shield, direct sun makes the air temperature read several degrees too high.
+* Use a 4-core cable of **at most about 1 m** through its own cable gland. I²C is meant for short distances; the firmware runs the bus at 50 kHz to tolerate the extra cable capacitance. Most breakouts already have 10 kΩ pull-ups on SDA/SCL; if readings drop out with a longer cable, add 4.7 kΩ pull-ups from SDA and SCL to `Vext` at the Heltec side.
+* Seal the cable entry of the shield loosely (drip loop downwards); the sensor itself must stay in free air, not in a sealed box, or the humidity reading follows the box instead of the weather.
+* Many cheap modules sold as "BME280" are really BMP280 (no humidity). If *Air Humidity* stays unavailable, check the chip marking.
+* If the module's address pin is wired high the address is `0x77`; set `bme280_address: "0x77"` in the node file.
+* Accuracy is about ±1 °C, ±3 % RH and ±1 hPa [R24]. Air pressure is not needed for the level (the TL-136 is vented), but it helps to interpret the data: falling pressure announces rain, and it lets you check the vent tube (a level that follows the pressure means a blocked vent).
+* Long exposure to near-100 % RH (fog, dew, common next to a brook) can cause a temporary offset that recovers in dry weather.
+* Because the BME280 is outside, the lite version has no humidity reading inside the box: replace the silica gel on a fixed schedule (spring and autumn).

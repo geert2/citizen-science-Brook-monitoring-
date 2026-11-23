@@ -1,0 +1,107 @@
+# Paste into a Home Assistant dashboard using "Manual card" (YAML editor).
+# BROOK LITE: water level, water temperature, EC, air temperature, humidity and pressure.
+#
+# ENTITY IDs: Home Assistant builds them from the device name plus the entity name,
+# e.g. sensor.brook_lite_gateway_brook_water_level.
+# Check the real IDs under Settings > Devices & services > ESPHome > Brook Lite Gateway
+# and, if they differ, use find-and-replace on the prefix.
+
+type: vertical-stack
+cards:
+  - type: markdown
+    content: |
+      ## Brook (lite station)
+      Water level on the staff gauge, water temperature and conductivity (EC25),
+      plus air temperature, humidity and pressure on the bank. New reading every 10 minutes.
+
+  - type: horizontal-stack
+    cards:
+      - type: gauge
+        entity: sensor.brook_lite_gateway_brook_water_level
+        name: Water Level
+        unit: m
+        min: 0
+        max: 2
+        needle: true
+        severity:
+          green: 0       # normal flow
+          yellow: 1.2    # high water - adjust to your staff gauge
+          red: 1.6       # near bank-full / flood - adjust to your site
+
+      - type: gauge
+        entity: sensor.brook_lite_gateway_brook_water_temperature
+        name: Water Temp
+        unit: °C
+        min: 0
+        max: 25
+        needle: true
+        severity:
+          green: 0
+          yellow: 18     # example thresholds; adjust to your brook
+          red: 21
+
+      - type: gauge
+        entity: sensor.brook_lite_gateway_brook_electrical_conductivity
+        name: EC25
+        unit: µS/cm
+        min: 0
+        max: 2000        # the analog EC sensor is only reliable up to about 2000 µS/cm
+        needle: true
+
+  - type: entities
+    title: Brook - telemetry and node health
+    show_header_toggle: false
+    entities:
+      - entity: binary_sensor.brook_lite_gateway_brook_node_online
+        name: Node online
+      - entity: binary_sensor.brook_lite_gateway_brook_sensor_dry
+        name: Sensor dry
+      - entity: binary_sensor.brook_lite_gateway_brook_level_above_sensor_range
+        name: Level above sensor range
+      - entity: sensor.brook_lite_gateway_brook_water_above_sensor
+        name: Water above sensor
+        icon: mdi:waves-arrow-up
+      - entity: sensor.brook_lite_gateway_brook_air_temperature
+        name: Air temperature
+        icon: mdi:thermometer
+      - entity: sensor.brook_lite_gateway_brook_air_humidity
+        name: Air humidity
+        icon: mdi:water-percent
+      - entity: sensor.brook_lite_gateway_brook_air_pressure
+        name: Air pressure
+        icon: mdi:gauge
+      - entity: sensor.brook_lite_gateway_brook_battery_voltage
+        name: Node battery (Li-ion)
+        icon: mdi:battery-high
+      - entity: sensor.brook_lite_gateway_brook_water_level
+        name: Last LoRa packet
+        secondary_info: last-updated
+      - entity: number.brook_lite_gateway_brook_sensor_height_above_gauge_zero
+        name: Sensor height above gauge zero (editable)
+
+  - type: history-graph
+    title: Brook - 48 h water level and EC
+    hours_to_show: 48
+    entities:
+      - entity: sensor.brook_lite_gateway_brook_water_level
+        name: Water level (m)
+      - entity: sensor.brook_lite_gateway_brook_electrical_conductivity
+        name: EC25 (µS/cm)
+
+  - type: history-graph
+    title: Brook - 7-day water level
+    hours_to_show: 168
+    entities:
+      - entity: sensor.brook_lite_gateway_brook_water_level
+        name: Water level (m)
+
+  - type: history-graph
+    title: Brook - 7-day temperatures and pressure
+    hours_to_show: 168
+    entities:
+      - entity: sensor.brook_lite_gateway_brook_water_temperature
+        name: Water (°C)
+      - entity: sensor.brook_lite_gateway_brook_air_temperature
+        name: Air (°C)
+      - entity: sensor.brook_lite_gateway_brook_air_pressure
+        name: Air pressure (hPa)

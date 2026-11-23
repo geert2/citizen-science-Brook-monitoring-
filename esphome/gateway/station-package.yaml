@@ -1,0 +1,182 @@
+# Everything the gateway needs for ONE brook station. Instantiated from brook-lite-gateway.yaml
+# with these variables: st, st_label, node_name, range_m, sensor_height, box_id, token,
+# level_id, temp_id, ec_id, air_temp_id, air_hum_id, pressure_id.
+# remote_id / broadcast_id behaviour: ESPHome packet_transport [R2] (`internal: false` verified by `esphome config` [R9]).
+# The remote_id values (d, t, ec, at, ah, ap, v) must match `broadcast_id` in common-brook-node.yaml.
+
+globals:
+  - id: ${st}_last_rx_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: ${st}_seen
+    type: bool
+    initial_value: 'false'
+
+number:
+  # Height of the TL-136 pressure port above the ZERO of the staff gauge (negative if the
+  # sensor sits below gauge zero). Adjustable from Home Assistant, survives reboots.
+  - platform: template
+    id: ${st}_sensor_height
+    name: "${st_label} Sensor Height Above Gauge Zero"
+    unit_of_measurement: "m"
+    device_class: distance
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: ${sensor_height}
+    min_value: -2
+    max_value: 3
+    step: 0.005
+    mode: box
+
+sensor:
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_water_column_m
+    remote_id: d
+    internal: false
+    name: "${st_label} Water Above Sensor"
+    unit_of_measurement: "m"
+    accuracy_decimals: 3
+    state_class: measurement
+    on_value:
+      then:
+        - component.update: ${st}_level
+
+  # Water level on the staff gauge = water above the sensor + sensor height above gauge zero.
+  - platform: template
+    id: ${st}_level
+    name: "${st_label} Water Level"
+    unit_of_measurement: "m"
+    device_class: distance
+    state_class: measurement
+    accuracy_decimals: 3
+    update_interval: never
+    lambda: |-
+      float col = id(${st}_water_column_m).state;
+      if (isnan(col)) return NAN;
+      if (col < 0.0f) col = 0.0f;
+      return col + id(${st}_sensor_height).state;
+
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_temp_c
+    remote_id: t
+    internal: false
+    name: "${st_label} Water Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_ec_us
+    remote_id: ec
+    internal: false
+    name: "${st_label} Electrical Conductivity"
+    unit_of_measurement: "µS/cm"
+    state_class: measurement
+    accuracy_decimals: 0
+
+  # BME280 in a radiation shield on the bank
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_air_temp
+    remote_id: at
+    internal: false
+    name: "${st_label} Air Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_air_humidity
+    remote_id: ah
+    internal: false
+    name: "${st_label} Air Humidity"
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_air_pressure
+    remote_id: ap
+    internal: false
+    name: "${st_label} Air Pressure"
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 1
+
+  # The battery value is the last one in each packet, so it triggers the upload.
+  - platform: packet_transport
+    provider: ${node_name}
+    id: ${st}_battery_v
+    remote_id: v
+    internal: false
+    name: "${st_label} Battery Voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    entity_category: diagnostic
+    accuracy_decimals: 2
+    on_value:
+      then:
+        - lambda: |-
+            id(${st}_last_rx_ms) = millis();
+            id(${st}_seen) = true;
+        - delay: 1s
+        - script.execute:
+            id: upload_to_opensensemap
+            box_id: "${box_id}"
+            token: "${token}"
+            level_sensor_id: "${level_id}"
+            temp_sensor_id: "${temp_id}"
+            ec_sensor_id: "${ec_id}"
+            air_temp_sensor_id: "${air_temp_id}"
+            air_hum_sensor_id: "${air_hum_id}"
+            pressure_sensor_id: "${pressure_id}"
+            # When the sensor is dry the level is unknown (only "below the sensor"), so it is not uploaded.
+            level_val: !lambda |-
+              float col = id(${st}_water_column_m).state;
+              return (isnan(col) || col < 0.03f) ? NAN : id(${st}_level).state;
+            temp_val: !lambda 'return id(${st}_temp_c).state;'
+            # A dry EC probe reads ~0: only upload EC while the sensor is under water.
+            ec_val: !lambda |-
+              float col = id(${st}_water_column_m).state;
+              return (isnan(col) || col < 0.03f) ? NAN : id(${st}_ec_us).state;
+            air_temp_val: !lambda 'return id(${st}_air_temp).state;'
+            air_hum_val: !lambda 'return id(${st}_air_humidity).state;'
+            pressure_val: !lambda 'return id(${st}_air_pressure).state;'
+
+binary_sensor:
+  # True when the water has dropped to or below the TL-136 (very low flow, or the probe moved)
+  - platform: template
+    name: "${st_label} Sensor Dry"
+    icon: mdi:water-off
+    lambda: |-
+      float col = id(${st}_water_column_m).state;
+      if (isnan(col)) return {};
+      return col < 0.03f;
+
+  # True when the TL-136 reaches the top of its range (flood): the real level may be higher.
+  - platform: template
+    name: "${st_label} Level Above Sensor Range"
+    icon: mdi:waves-arrow-up
+    lambda: |-
+      float col = id(${st}_water_column_m).state;
+      if (isnan(col)) return {};
+      return col > ${range_m} - 0.02f;
+
+  - platform: template
+    name: "${st_label} Node Online"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(${st}_seen)) return false;
+      return (uint32_t) (millis() - id(${st}_last_rx_ms)) < ${offline_after_ms};

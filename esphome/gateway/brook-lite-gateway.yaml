@@ -1,0 +1,172 @@
+# BROOK LITE indoor LoRa gateway: receives the node packets (water level, water temperature, EC,
+# air temperature, humidity and pressure), exposes them to Home Assistant and uploads to openSenseMap.
+#
+# Sources: ESPHome packet_transport [R2], sx126x [R1], http_request [R6]; openSenseMap upload [R26][R27][R28]
+# (see docs/REFERENCES.md).
+#
+# To add a station:
+#   1. add its secrets to secrets.yaml and an `sN_*` block under `substitutions:`
+#   2. add a provider entry under `packet_transport:`
+#   3. add a package entry under `packages:`
+
+substitutions:
+  # Node counted offline after 35 min without a packet (3 missed 10-minute cycles).
+  # If you change sleep_minutes on the node, set this to about 3.5 x the cycle.
+  offline_after_ms: "2100000"
+
+  # Station 1
+  s1_sensor_height: !secret station_1_sensor_height_m
+  s1_box_id: !secret station_1_osem_box_id
+  s1_token: !secret station_1_osem_token
+  s1_level_id: !secret station_1_osem_level_id
+  s1_temp_id: !secret station_1_osem_water_temp_id
+  s1_ec_id: !secret station_1_osem_ec_id
+  s1_air_temp_id: !secret station_1_osem_air_temp_id
+  s1_air_hum_id: !secret station_1_osem_air_hum_id
+  s1_pressure_id: !secret station_1_osem_pressure_id
+
+packages:
+  station1: !include
+    file: station-package.yaml
+    vars:
+      st: s1
+      st_label: "Brook"
+      node_name: brook-lite-node-1
+      range_m: "2.0"               # must match range_m of the node
+      sensor_height: ${s1_sensor_height}
+      box_id: ${s1_box_id}
+      token: ${s1_token}
+      level_id: ${s1_level_id}
+      temp_id: ${s1_temp_id}
+      ec_id: ${s1_ec_id}
+      air_temp_id: ${s1_air_temp_id}
+      air_hum_id: ${s1_air_hum_id}
+      pressure_id: ${s1_pressure_id}
+
+esphome:
+  name: brook-lite-gateway
+  friendly_name: "Brook Lite Gateway"
+
+esp32:
+  variant: esp32s3
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    # OTA is encrypted with the same key as the API
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Brook Lite Gateway"
+    password: !secret ap_password
+
+captive_portal:
+
+http_request:
+  useragent: esphome/brook-lite-gateway
+  timeout: 10s
+  watchdog_timeout: 20s
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+sx126x:
+  id: lora_radio
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  modulation: LORA
+  frequency: 869525000   # must match the node
+  bandwidth: 125_0kHz
+  spreading_factor: 9
+  coding_rate: CR_4_5
+  pa_power: 14
+  rf_switch: true
+  tcxo_voltage: 1_8V   # Heltec V3 TCXO, as in ESPHome's device page [R10]
+  tcxo_delay: 5ms
+  crc_enable: true
+
+# A receiver needs the key of each provider (node) it listens to [R2].
+packet_transport:
+  - platform: sx126x
+    id: lora_transport
+    providers:
+      - name: brook-lite-node-1
+        encryption: !secret lora_encryption_key
+
+sensor:
+  - platform: wifi_signal
+    name: "Gateway Wi-Fi Signal"
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ==========================================
+# openSenseMap upload (one call per received packet)
+# ==========================================
+script:
+  - id: upload_to_opensensemap
+    mode: queued
+    max_runs: 5
+    parameters:
+      box_id: string
+      token: string
+      level_sensor_id: string
+      temp_sensor_id: string
+      ec_sensor_id: string
+      air_temp_sensor_id: string
+      air_hum_sensor_id: string
+      pressure_sensor_id: string
+      level_val: float
+      temp_val: float
+      ec_val: float
+      air_temp_val: float
+      air_hum_val: float
+      pressure_val: float
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://api.opensensemap.org/boxes/" + box_id + "/data";'
+          request_headers:   # not `headers` [R6]
+            Content-Type: application/json
+            # openSenseMap expects the box access token as-is (no "Bearer " prefix) [R26][R28]
+            Authorization: !lambda 'return token.c_str();'   # header lambdas must return const char*
+          body: !lambda |-
+            // Only valid values are sent: a NaN would make the whole JSON invalid.
+            std::string p = "[";
+            auto add = [&](const std::string &id, float v, const char *fmt) {
+              if (isnan(v)) return;
+              char buf[96];
+              snprintf(buf, sizeof(buf), fmt, id.c_str(), v);
+              if (p.size() > 1) p += ",";
+              p += buf;
+            };
+            add(level_sensor_id,    level_val,    R"({"sensor":"%s","value":%.3f})");
+            add(temp_sensor_id,     temp_val,     R"({"sensor":"%s","value":%.2f})");
+            add(ec_sensor_id,       ec_val,       R"({"sensor":"%s","value":%.0f})");
+            add(air_temp_sensor_id, air_temp_val, R"({"sensor":"%s","value":%.1f})");
+            add(air_hum_sensor_id,  air_hum_val,  R"({"sensor":"%s","value":%.0f})");
+            add(pressure_sensor_id, pressure_val, R"({"sensor":"%s","value":%.1f})");
+            p += "]";
+            return p;
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code >= 300)
+                    ESP_LOGW("osem", "openSenseMap upload failed, HTTP %d", response->status_code);
+          on_error:
+            then:
+              - lambda: 'ESP_LOGW("osem", "openSenseMap upload failed (network error)");'

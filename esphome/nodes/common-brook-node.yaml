@@ -1,0 +1,287 @@
+# BROOK LITE field node (Heltec WiFi LoRa 32 V3), battery powered.
+# Measures:
+#   * water above the TL-136 (0-2 m, 4-20 mA across a shunt, ESP32 ADC)
+#   * water temperature (DS18B20)
+#   * electrical conductivity, temperature-compensated to 25 °C (DFRobot SEN0244 analog TDS/EC sensor)
+#   * air temperature, relative humidity and pressure (BME280, in a radiation shield on the bank)
+#   * battery voltage (diagnostic)
+# The gateway turns "water above the sensor" into the water level on the staff gauge.
+# Deep sleep: no network or OTA while asleep [R7]; DS18B20 conversion time [R8][R23].
+# Per-node values are overridden in brook-lite-node-N.yaml via `substitutions:`.
+#
+# Sources for the settings below are listed in docs/REFERENCES.md ([R#] tags in comments):
+#   sx126x / packet_transport / adc / deep_sleep / bme280 ...  -> ESPHome component docs [R1]-[R9]
+#   Heltec V3 pins, battery divider, Vext, TCXO               -> [R10]-[R14]
+
+substitutions:
+  # --- timing ---
+  sleep_minutes: "10"            # time between readings (a 0-30 s random jitter is added)
+                                 # brooks react fast; 10 min is a good balance with battery life (docs/field-guide.md section 6)
+  low_battery_v: "3.4"           # below this, skip measuring and sleep longer (ignored if the reading is < 2 V)
+  low_battery_sleep_minutes: "120"
+  warmup: 700ms                  # extra settling time after boot (Vext is already on since early boot)
+  ds18b20_wait: 900ms            # DS18B20 12-bit conversion takes up to 750 ms [R23]
+  tx_wait: 1500ms                # airtime + margin before the radio sleeps [R22]
+  # --- level channel (TL-136, 4-20 mA across a shunt resistor) ---
+  range_m: "2.0"                 # full-scale range of the TL-136 (0-2 m: a brook changes at most ~2 m)
+  shunt_ohm: "100.0"             # 100 ohm keeps 20 mA (2.0 V) inside the ESP32-S3 ADC range
+  zero_offset_m: "0.0"           # add after comparing with the staff gauge
+  span_scale: "1.0"              # multiplies the span (1.0 = nominal)
+  # --- EC channel (two-point calibration, docs/field-guide.md section 3.2) ---
+  ec_gain: "1.0"
+  ec_offset: "0.0"
+  # --- battery divider on the Heltec V3 (390k/100k = x4.9) [R12] ---
+  vbat_scale: "4.9"              # calibrate against a multimeter; ESPHome's device page uses 2.0 [R10]
+  # ADC_Ctrl (GPIO37) polarity DEPENDS ON THE BOARD REVISION [R11][R13]:
+  #   V3.0 / V3.1: LOW connects the divider  -> "true"
+  #   V3.2 (check the silkscreen): HIGH connects it -> "false"
+  vbat_ctrl_active_low: "false"
+  # Vext (GPIO36) enable level. V3/V3.1: LOW = ON [R10]. V3.2 not confirmed [R11]; verify with a multimeter.
+  vext_active_low: "true"
+  # --- BME280 (air temperature + humidity) ---
+  bme280_address: "0x76"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    # BME280 and DS18B20 are powered from Vext and are probed once during setup,
+    # so the rail must be ON before they are set up.
+    # Priority 750 = after the GPIO output exists (800) and before sensors (600).
+    - priority: 750
+      then:
+        - output.turn_on: vext_power
+        - lambda: 'delay(30);'
+    - priority: -100
+      then:
+        - script.execute: measure_and_sleep
+
+esp32:
+  variant: esp32s3
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  cpu_frequency: 80MHZ
+  framework:
+    type: esp-idf
+
+logger:
+  level: WARN
+
+# SPI bus for the onboard SX1262 LoRa chip
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+sx126x:
+  id: lora_radio
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  modulation: LORA
+  frequency: 869525000           # 869.525 MHz: 869.4-869.65 MHz sub-band, 10 % duty cycle [R25]
+  bandwidth: 125_0kHz
+  spreading_factor: 9
+  coding_rate: CR_4_5
+  pa_power: 14
+  rf_switch: true                # DIO2 drives the RF switch on the Heltec V3
+  tcxo_voltage: 1_8V             # [R10]
+  tcxo_delay: 5ms
+  crc_enable: true
+
+# The node only transmits, once per cycle, when the script calls component.update.
+packet_transport:
+  - platform: sx126x
+    id: lora_transport
+    update_interval: never
+    encryption: !secret lora_encryption_key
+    sensors:
+      # Short broadcast IDs keep the frame small. The gateway maps them with `remote_id:`.
+      - id: water_column_m
+        broadcast_id: d
+      - id: water_temp_c
+        broadcast_id: t
+      - id: ec_compensated_us
+        broadcast_id: ec
+      - id: air_temp_c
+        broadcast_id: at
+      - id: air_humidity
+        broadcast_id: ah
+      - id: air_pressure
+        broadcast_id: ap
+      - id: battery_voltage_v
+        broadcast_id: v
+
+output:
+  - platform: gpio
+    pin: GPIO36
+    id: vext_power
+    inverted: ${vext_active_low}
+  - platform: gpio
+    pin: GPIO37
+    id: vbat_adc_enable
+    inverted: ${vbat_ctrl_active_low}
+  - platform: gpio
+    pin: GPIO35
+    id: status_led               # flashes briefly at every wake-up
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+# Separate I2C bus (not the onboard OLED bus) for the BME280
+i2c:
+  sda: GPIO41
+  scl: GPIO42
+  scan: false
+  frequency: 50kHz               # slower clock tolerates the ~0.5-1 m cable to the radiation shield
+
+sensor:
+  # 1. Air temperature, relative humidity and pressure (BME280 in a radiation shield, outside the box).
+  #    Address 0x76 (SDO to GND) or 0x77 (SDO to VCC) [R5][R24].
+  - platform: bme280_i2c
+    id: bme280_hub
+    address: ${bme280_address}
+    update_interval: never
+    temperature:
+      id: air_temp_c
+      name: "Air Temperature"
+      oversampling: 1x
+    humidity:
+      id: air_humidity
+      name: "Air Humidity"
+      oversampling: 1x
+    pressure:
+      id: air_pressure
+      name: "Air Pressure"
+      oversampling: 1x
+
+  # 2. Water temperature (DS18B20). Result arrives ~750 ms after update.
+  - platform: dallas_temp
+    id: water_temp_c
+    name: "Water Temperature"
+    accuracy_decimals: 2
+    update_interval: never
+
+  # 3. Shunt voltage of the level channel on GPIO5 (through 1 kohm + clamp, docs/wiring.md).
+  #    12 dB attenuation reads up to about 3.1 V on the ESP32-S3 [R17][R3].
+  - platform: adc
+    pin: GPIO5
+    id: depth_voltage
+    attenuation: 12db
+    samples: 16
+    sampling_mode: avg
+    update_interval: never
+    internal: true
+
+  # 4. Water above the sensor (TL-136 0-${range_m} m, 4-20 mA across ${shunt_ohm} ohm).
+  - platform: template
+    id: water_column_m
+    name: "Water Above Sensor"
+    unit_of_measurement: "m"
+    accuracy_decimals: 3
+    update_interval: never
+    lambda: |-
+      float v = id(depth_voltage).state;
+      if (isnan(v)) return NAN;
+      float i_ma = v / ${shunt_ohm} * 1000.0f;
+      // Outside 3.5-22 mA means a broken wire, a short or a boost fault.
+      // Above 20 mA (a flood beyond the range) the value is kept: it shows 'at least range_m'.
+      if (i_ma < 3.5f || i_ma > 22.0f) return NAN;
+      float depth = (i_ma - 4.0f) / 16.0f * ${range_m};
+      depth = depth * ${span_scale} + ${zero_offset_m};
+      return depth < -0.1f ? NAN : depth;
+
+  # 5. EC module output on GPIO6. The probe sits in the brook, the module in the dry box.
+  #    The module is powered from Vext, so it only runs (and excites the probe) during a reading.
+  - platform: adc
+    pin: GPIO6
+    id: ec_voltage
+    attenuation: 12db
+    samples: 16
+    sampling_mode: avg
+    update_interval: never
+    internal: true
+
+  # 6. EC at 25 °C, compensated with the DS18B20 temperature (2 %/°C).
+  - platform: template
+    id: ec_compensated_us
+    name: "Electrical Conductivity (EC25)"
+    unit_of_measurement: "µS/cm"
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float v = id(ec_voltage).state;
+      if (isnan(v)) return NAN;
+      float temp = id(water_temp_c).state;
+      if (isnan(temp)) temp = 12.0f;   // fallback if the DS18B20 failed
+      float comp_v = v / (1.0f + 0.02f * (temp - 25.0f));
+      // DFRobot cubic TDS curve [R19]; TDS = EC / 2, so the 0.5 and 2.0 factors cancel.
+      float ec = 133.42f * comp_v * comp_v * comp_v - 255.86f * comp_v * comp_v + 857.39f * comp_v;
+      ec = ec * ${ec_gain} + ${ec_offset};
+      return ec < 0.0f ? 0.0f : ec;
+
+  # 7. Node battery voltage
+  - platform: adc
+    pin: GPIO1
+    id: battery_voltage_v
+    name: "Battery Voltage"
+    attenuation: 2.5db
+    samples: 8
+    sampling_mode: avg
+    update_interval: never
+    filters:
+      - multiply: ${vbat_scale}
+
+script:
+  - id: measure_and_sleep
+    mode: single
+    then:
+      # Wake-up flash + battery reading with the divider enabled
+      - output.turn_on: status_led
+      - output.turn_on: vbat_adc_enable
+      - delay: 50ms
+      - component.update: battery_voltage_v
+      - output.turn_off: vbat_adc_enable
+      - output.turn_off: status_led
+
+      # Low battery: report the voltage only, then sleep much longer
+      - if:
+          condition:
+            # Below 2 V (or NaN) the divider is not connected (wrong vbat_ctrl_active_low?),
+            # not an empty cell: do not lock the node into low-battery mode.
+            lambda: |-
+              float v = id(battery_voltage_v).state;
+              return !isnan(v) && v > 2.0f && v < ${low_battery_v};
+          then:
+            - output.turn_off: vext_power
+            - component.update: lora_transport
+            - delay: ${tx_wait}
+            - sx126x.set_mode_sleep:
+            - deep_sleep.enter:
+                id: deep_sleep_control
+                sleep_duration: !lambda 'return (uint32_t) ${low_battery_sleep_minutes} * 60000UL;'
+
+      # Normal cycle
+      - output.turn_on: vext_power         # already on; harmless
+      - delay: ${warmup}
+      - component.update: bme280_hub
+      - component.update: water_temp_c
+      - component.update: depth_voltage
+      - component.update: ec_voltage
+      - delay: ${ds18b20_wait}             # DS18B20 / BME280 results arrive meanwhile
+      - component.update: water_column_m   # needs depth_voltage
+      - component.update: ec_compensated_us # needs the water temperature
+      - output.turn_off: vext_power
+      - component.update: lora_transport   # broadcast all values
+      - delay: ${tx_wait}
+      - sx126x.set_mode_sleep:
+      - deep_sleep.enter:
+          id: deep_sleep_control
+          # random 0-30 s jitter keeps several nodes from colliding over time
+          sleep_duration: !lambda 'return (uint32_t) ${sleep_minutes} * 60000UL + (random_uint32() % 30000UL);'
+
+deep_sleep:
+  id: deep_sleep_control
