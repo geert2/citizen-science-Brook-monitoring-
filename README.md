@@ -1,5 +1,8 @@
 # De Meetbeek: citizen-science brook monitoring
 
+
+moved to: https://github.com/geert2/water-management-brook-groundwater
+
 A low-cost, open-source monitoring station for **De Grote Beek** (Hansbeke, Flanders). It
 measures water level, temperature, conductivity and turbidity, plus air quality nearby, and
 shares the data openly. It is designed so that people with limited electronics skills can
